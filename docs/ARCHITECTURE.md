@@ -22,16 +22,46 @@ strip = true
 ```
 
 Subcommands:
-- `tap install` — lay down `$TAP_BIN_DIR/tap` + the shim farm; idempotent
-- `tap compile <profile.kdl> [-o <out>]` — KDL → FlatBuffers artifact
-- `tap profile use <name>` — atomic-rename the active-profile pointer
-- `tap profile diff <a> <b>` — show added/revoked/swapped between two profiles
-- `tap why <rule-id|argv...>` — explain a decision; full provenance ladder
-- `tap doctor` — verify install integrity, PATH ordering, env-var sanity
+- `tap <tool> <args...>` — the primary invocation form the agent uses (e.g., `tap git status`, `tap cargo build`). Dispatches to the matching shim handler internally.
+- `tap help` — the agent's discovery mechanism. Lists capabilities permitted under the active profile, with brief descriptions and example invocations.
+- `tap install` — lay down `$TAP_BIN_DIR/tap` + the shim farm; idempotent.
+- `tap compile <profile.kdl> [-o <out>]` — KDL → FlatBuffers artifact.
+- `tap profile use <name>` — atomic-rename the active-profile pointer.
+- `tap profile diff <a> <b>` — show added/revoked/swapped between two profiles.
+- `tap why <rule-id|argv...>` — explain a decision; full provenance ladder.
+- `tap doctor` — verify install integrity, PATH ordering, env-var sanity.
 
-Invocation as a shim (argv[0] ∈ {`tap-git`, `tap-bash`, ...}) goes through the trampoline path, not the subcommand dispatcher.
+Invocation as a shim (argv[0] ∈ {`tap-git`, `tap-bash`, ...}) goes through the trampoline path, not the subcommand dispatcher. The shim path exists primarily as defense-in-depth — see "The agent's view of available commands" below.
 
-### The shim farm
+### The agent's view of available commands
+
+The orchestrator configures the agent's tool-allowlist (Claude's tool permissions, Codex's `allowed_tools`, etc.) to grant **exactly one entry: `tap *`**. Every action the agent wants to take is `tap <tool> <args>`. The agent has no other verb in its toolbox.
+
+Discovery happens via `tap help`. The output enumerates capabilities permitted under the *active profile*, not the static install — so when the profile changes, the agent's reachable surface visibly changes too. Example:
+
+```
+$ tap help
+Active profile: phase-2-fixup
+Capabilities permitted:
+  git       — read operations (status, log, diff, show, fetch)
+  cargo     — build/test/check/fmt/clippy (no publish)
+  bash      — lint/test/build scripts; no destructive ops
+  fs        — read/write inside $CWD
+Capabilities forbidden:
+  release, gh, docker, network (except localhost)
+Switch profiles: tap profile use <name>
+Explain a denial: tap why <argv...>
+```
+
+This is the agent's only discovery mechanism. It does *not* `ls $TAP_BIN_DIR` to learn what's available; it doesn't probe with `which`; it doesn't read the shim filesystem at all. The well-configured agent simply reads `tap help` and works from there.
+
+Why this matters: cooperative agents react badly to `command not found`. They interpret it as "tool not installed" and try workarounds — alternate binaries, `brew install`, hallucinated scripts. The single-entry-point design eliminates the `command not found` path entirely. Every refusal is a structured message addressed to the agent, in the same shape as a permitted command's output. The agent learns to stop and report BLOCKED, not to try to route around the missing tool.
+
+### The shim farm (defense-in-depth)
+
+The agent's allowlist is the primary boundary. The shim farm is the *secondary* boundary, for any path where the agent (or a child process it spawns) reaches for tools by name on `PATH` rather than via the `tap` allowlist entry. The canonical case: the agent uses its allowlisted `tap bash -c "..."` to spawn a shell, and the shell's child processes look up `git` / `cargo` / `docker` on `PATH`. Without the shim farm, those children would resolve to the real binaries and escape the filter. With the shim farm, they resolve back into `tap`.
+
+So the shim farm is real, necessary, and load-bearing — but it serves a different purpose than the agent's allowlist. The allowlist makes the design *legible* (one rule: only `tap`). The shim farm makes the boundary *leak-proof* (even spawned grandchildren route through `tap`).
 
 `$TAP_BIN_DIR/` contains one real `tap` binary and N argv[0]-dispatched aliases. **Install strategy is OS-specific**:
 
@@ -288,11 +318,19 @@ brainstorm → fixup
 
 For team review, incident forensics, and "what changed between Monday and Friday." Borrowed unchanged from Strategy D's strongest moment in the bake-off.
 
-## PATH ownership
+## Orchestrator setup
 
-The orchestrator's responsibility at agent launch:
+The orchestrator has two responsibilities at agent launch:
+
+1. **Configure the agent's tool-allowlist to contain exactly one entry: `tap *`.** This is the primary boundary. How this is done depends on the agent backend — Claude Code's `--allowedTools`, Codex's `allowed_tools` config, etc. The agent literally has no other tool permission.
+
+2. **Set up environment + shim PATH as defense-in-depth.** In case the agent's allowlist permits a shell that itself spawns child processes by name, those children must still route through `tap`.
 
 ```bash
+# Allowlist configuration (agent-backend-specific)
+export CLAUDE_ALLOWED_TOOLS="tap"      # or equivalent for whichever backend
+
+# Defense-in-depth: PATH + env
 export TAP_BIN_DIR=$HOME/.local/share/tap/bin
 export TAP_AGENT_DIR=/run/tap/agents/$(uuidgen)
 export TAP_REAL_PATH="$PATH"
@@ -305,7 +343,7 @@ ln -sf $TAP_AGENT_DIR/compiled/brainstorm.fbs $TAP_AGENT_DIR/profile.active
 exec claude   # or whichever agent backend
 ```
 
-The agent inherits `TAP_BIN_DIR`, `TAP_AGENT_DIR`, `TAP_REAL_PATH`, and the modified `PATH`. Every command it runs resolves to a `tap` shim. `TAP_REAL_PATH` is the only way to escape — and the only thing that uses it is `tap` itself, looking up the real underlying binary.
+The agent inherits `TAP_BIN_DIR`, `TAP_AGENT_DIR`, `TAP_REAL_PATH`, and the modified `PATH`. The allowlist ensures the agent only ever invokes `tap` directly. The PATH manipulation ensures any subprocess the agent spawns (via `tap bash -c "..."`) still has its children intercepted. `TAP_REAL_PATH` is the only way past the shim farm — and the only thing that uses it is `tap` itself, looking up the real underlying binary.
 
 ## Cross-platform
 
