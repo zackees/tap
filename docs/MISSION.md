@@ -36,13 +36,17 @@ The distinction matters because the design choices differ. Cooperative-agent con
 
 It's a command filter. Nothing more, nothing less.
 
-## The alpha-command framing
+## The single-entry-point framing
 
-The agent's view of the system is whatever resolves on its `PATH`. `tap` owns `PATH`. Whatever directory `tap` prepends to `PATH` wins every lookup, unconditionally, before the OS even consults `/usr/bin` or `C:\Windows\System32`. Tools `tap` does not symlink into its bin directory don't exist from the agent's perspective — `command not found`, full stop.
+The agent's allowlist (Claude's tool permissions, Codex's `allowed_tools`, etc.) is configured by the orchestrator to grant exactly one entry: **`tap *`**. Anything the agent wants to run goes through `tap <tool> <args>` — `tap git status`, `tap cargo build`, `tap bash -c "..."`. There is no second verb in its toolbox.
 
-This flips the design from defensive to declarative. The set of binaries the agent can invoke is literally `ls $TAP_BIN_DIR`. **Allowlist by presence, not by policy.** Absence is the policy for the long tail; `tap`'s policy table handles the rest.
+This matters because of how cooperative agents react to refusal. If the agent sees `command not found`, it treats the tool as missing and tries workarounds — `which`, alternate binaries, suggesting `brew install`, hallucinating scripts that approximate the missing tool. Exactly the wrong response. Instead, `tap` returns a **structured refusal** addressed to the agent: *"blocked by profile `phase-1-brainstorm`; tests are forbidden in this phase; switch to `phase-2-fixup` to unblock."* That's actionable conversation, not a dead end.
 
-That's the kind of guarantee normally expensive to get (seccomp filters, AppArmor profiles, container syscall allowlists), achieved with a directory and a sort order.
+Discovery is `tap help` (which lists what the active profile permits), not filesystem inspection. The agent learns its capability surface from a single command it already has permission to call.
+
+PATH manipulation — the shim farm under `$TAP_BIN_DIR` — exists as **defense-in-depth** for any path where the agent spawns a shell (Bash tool, `tap bash`). Inside that shell, `git`/`cargo`/`bash` still resolve to `tap` shims, so even grandchildren routes through the filter. But the *primary* mechanism is the agent's tool-allowlist being a single entry, not PATH games. The shim farm makes the boundary leak-proof; the allowlist makes the design legible.
+
+That's the kind of guarantee normally expensive to get (seccomp filters, AppArmor profiles, container syscall allowlists), achieved with one allowlist entry and a directory of shims.
 
 ## High-level architecture
 
