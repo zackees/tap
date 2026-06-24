@@ -16,15 +16,20 @@ These properties only hold for **one lattice at a time**. The moment a second co
 
 ## 2. Alpha command, top dog
 
-The agent's view of the system is whatever resolves on its `PATH`. We don't compete for resolution priority — we own resolution. Whatever directory we prepend to `PATH` wins every lookup, before the OS even consults `/usr/bin` or `C:\Windows\System32`.
+The agent has exactly one command in its tool-allowlist: **`tap`**. Every action the agent wants to take is `tap <tool> <args>`. There is no second verb to compete with — `tap` *is* the resolver.
 
 This flips the design from defensive to declarative:
 
-- **Allowlist by presence, not by policy.** Tools we don't symlink into our bin directory don't exist from the agent's perspective. `command not found`, full stop. No interception logic needed for the long tail.
-- **No race between "wrap it" and "agent finds it."** Adding a new tool is a one-line symlink. Not adding it is also a complete answer.
-- **You become the resolver, not a participant in resolution.** The shim calls the real binary by absolute path (resolved once at install time, baked in or stored in config). Even inside the shim, there's no PATH lookup the agent could poison. The chokepoint is total.
+- **One allowlist entry, total coverage.** The orchestrator grants the agent permission to invoke `tap *`. Nothing else. The agent cannot call `git` directly, cannot call `bash` directly, cannot reach for anything outside of `tap`. The reachable universe of agent actions is exactly *what `tap` permits under the active profile*.
+- **Discovery is conversational, not filesystem.** The agent learns its capability surface from `tap help`, which enumerates what the active profile allows. No `ls`, no `which`, no `command -v` — the agent reads a single command's output and works from there.
+- **No race between "wrap it" and "agent finds it."** Adding a new tool capability is editing a profile (and shipping a shim so any spawned shell can find it). Not adding it is also a complete answer — the agent won't reach for it because nothing told it the capability exists.
+- **You become the resolver, not a participant in resolution.** The agent's tool-permission layer is the front gate. `tap` decides what passes. The shim farm under `$PATH` is defense-in-depth for any shell-spawn path; for the agent's direct invocations, the allowlist *is* the policy boundary.
 
-The kind of guarantee normally expensive to get (seccomp filters, AppArmor profiles, container syscall allowlists), achieved with a directory and a sort order.
+The kind of guarantee normally expensive to get (seccomp filters, AppArmor profiles, container syscall allowlists), achieved with a one-entry allowlist plus a directory of shims.
+
+**Why this works for cooperative agents specifically**: a cooperative agent reads error output and adjusts. If we returned `command not found` for forbidden tools, the agent would treat them as *missing* and try workarounds — alternate binaries, suggesting `brew install`, hallucinating equivalent scripts. If instead we return a structured refusal *from the same `tap` command the agent already knows how to call* — "blocked by profile `phase-1-brainstorm`; switch to `phase-2-fixup` to unblock" — the agent stops and reports BLOCKED. The single-entry-point design eliminates the `command not found` path entirely; every response is in the same shape, addressable in conversation.
+
+For adversarial agents this would all be different — but that's not our threat model (see §9).
 
 ---
 
