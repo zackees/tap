@@ -2,7 +2,7 @@
 
 Universal command filter for AI coding agents.
 
-`tap` is a single binary that sits between an AI coding agent and every tool the agent reaches for — `git`, `bash`, `cargo`, `gh`, `docker`, anything. The agent's `PATH` is owned by `tap`; every command resolves to a `tap` shim first. The shim consults the active profile and decides: permit, revoke, or rewrite. Decisions are logged. The agent gets back the real tool's output, or a structured refusal.
+`tap` is a single binary that mediates every action an AI coding agent takes. The agent's tool-allowlist contains exactly one entry — `tap *` — so every action it performs is `tap <tool> <args>`: `tap git status`, `tap cargo build`, `tap bash -c "..."`. `tap` consults the active profile and decides: permit, revoke, or rewrite. Decisions are logged. The agent gets back the real tool's output, or a structured refusal explaining what's blocked and how to unblock it. A shim farm under `$PATH` provides defense-in-depth for any subprocess path where children look up tools by name.
 
 ## Status
 
