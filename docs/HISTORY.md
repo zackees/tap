@@ -189,6 +189,21 @@ Tested against the actual call patterns: `<name> git push`, `<name> write`, `<na
 
 Repo created at https://github.com/zackees/tap.
 
+## 18. Refinement during documentation: the single-entry-point sharpening
+
+While writing the initial docs, the "alpha command, top dog" framing went out as *"the agent's view of the system is whatever resolves on its `PATH` — tools we don't symlink are `command not found`."* Allowlist by presence, not by policy.
+
+This framing was promptly identified as wrong on two counts:
+
+1. **`command not found` is exactly the wrong signal for a cooperative agent.** Well-tuned agents (Claude in particular) treat "tool not installed" as a workaround invitation — they'll try `which`, attempt alternates, suggest `brew install`, hallucinate scripts that approximate the missing tool. We want them to *stop and report blocked*, not work around it.
+2. **The agent's discovery model isn't filesystem inspection.** Claude doesn't `ls $TAP_BIN_DIR` to learn what's available; it works from its tool-permission allowlist plus the system prompt.
+
+The corrected framing: the orchestrator configures the agent's tool-allowlist to contain exactly one entry — **`tap *`**. Every action is `tap <tool> <args>`. Refusals are *structured conversational messages* returned from the same `tap` command the agent already knows how to call — never `command not found`. Discovery is `tap help`. PATH manipulation (the shim farm) drops from "primary mechanism" to "defense-in-depth for any path where the agent spawns a shell whose children look up tools by name."
+
+Concretely, the change touched MISSION.md (rewrote the alpha-command section), ARCHITECTURE.md (added "the agent's view of available commands" + reframed PATH ownership as orchestrator setup with two responsibilities), CONCEPTS.md (rewrote §2 to lead with the one-allowlist-entry framing and added a trailing paragraph on why this specifically suits cooperative agents), and this history note.
+
+The shim farm is still real and still load-bearing — but for a different reason than the original framing suggested. The allowlist makes the design *legible* (one rule: only `tap`). The shim farm makes the boundary *leak-proof* (subprocess grandchildren still route through `tap`). Two layers, two purposes.
+
 ---
 
 ## Where we are now
